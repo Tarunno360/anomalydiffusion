@@ -39,6 +39,8 @@ def test_on_device(obj_names, args):
     if not os.path.exists(args.checkpoint_path):
         os.makedirs(args.checkpoint_path)
 
+    # Limit to first 10 samples for quick testing
+    num_examples = 10
 
     for obj_name in obj_names:
         print(obj_name)
@@ -50,7 +52,28 @@ def test_on_device(obj_names, args):
         model.fc = nn.Linear(model.fc.in_features, class_num)
         model=model.cuda()
         model.load_state_dict(torch.load(os.path.join(args.checkpoint_path,run_name+'.pckl')))
-        test(args,obj_name, model, anomaly_names)
+
+        # Create a subset of the dataset with only num_examples samples
+        subset_indices = list(range(min(num_examples, len(dataset))))
+        subset_dataset = torch.utils.data.Subset(dataset, subset_indices)
+
+        # Modify test function to use subset
+        test_subset(args, obj_name, model, anomaly_names, subset_dataset)
+
+def test_subset(args, obj_name, model, anomaly_names, dataset):
+    model.eval()
+
+    dataloader = DataLoader(dataset, batch_size=100,
+                            shuffle=False, num_workers=0)
+
+    for i_batch, sample_batched in enumerate(dataloader):
+        image, label = sample_batched
+        image = image.cuda()
+        label = label.cuda()
+        y_pred = model(image)
+        prediction = torch.argmax(y_pred, 1)
+        correct = (prediction == label).sum().float()
+        print("Accuracy: %.4f"%(correct/len(label)))
 
 if __name__=="__main__":
     import argparse

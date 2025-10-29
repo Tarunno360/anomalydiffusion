@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run MVTec Anomaly Diffusion",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/run-mvtec.py",
+            "console": "integratedTerminal",
+            "args": [
+    "--data_path",
+    "C:\\Users\\tarun\\AnnomalyDiffusion\\anomalydiffusion\\data\\leather"
+],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CONDA_DEFAULT_ENV": "anomalydiff"
+            },
+            "python": "C:\\Users\\tarun\\miniconda3\\envs\\anomalydiff\\python.exe"
+        },
+        {
+            "name": "Run Diffusion Main Script",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--base",
+                "configs/latent-diffusion/txt2img-1p4B-finetune-encoder+embedding.yaml",
+                "--actual_resume",
+                "models/ldm/text2img-large/model.ckpt",
+                "--mvtec_path",
+                "C:\\Users\\tarun\\AnnomalyDiffusion\\anomalydiffusion\\data\\leather"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CONDA_DEFAULT_ENV": "anomalydiff"
+            },
+            "python": "C:\\Users\\tarun\\miniconda3\\envs\\anomalydiff\\python.exe"
+        }
+    ]
+}
