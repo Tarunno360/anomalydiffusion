@@ -25,7 +25,6 @@ def load_model_from_config(config, ckpt, verbose=False):
     print(f"Loading model from {ckpt}")
     pl_sd = torch.load(ckpt, map_location="cpu")
     sd = pl_sd["state_dict"]
-    config.model.params.ckpt_path = ckpt
     model = instantiate_from_config(config.model)
     m, u = model.load_state_dict(sd, strict=False)
     if len(m) > 0 and verbose:
@@ -88,7 +87,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--data_root",
-        required=True,
+        required=False,
+    )
+    parser.add_argument(
+        "--image_path",
+        help="Path to single input image"
+    )
+    parser.add_argument(
+        "--mask_path",
+        help="Path to single mask image"
     )
     parser.add_argument(
         "--sample_name",
@@ -104,51 +111,95 @@ if __name__ == "__main__":
         help='whether use adaptive attention reweighting',
     )
 
-    # setup_seed(42)
+    setup_seed(42)
     opt = parser.parse_args()
-    config = OmegaConf.load("configs/latent-diffusion/txt2img-1p4B-finetune-encoder+embedding.yaml")
-    actual_resume = './models/ldm/text2img-large/model.ckpt'
-    model = load_model_from_config(config, actual_resume)
-    sample_name=opt.sample_name
-    anomaly_name=opt.anomaly_name
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model.to(device)
-    sampler = DDIMSampler(model)
-    model.prepare_spatial_encoder(optimze_together=True)
-    ckpt = torch.load('logs/anomaly-checkpoints/checkpoints/spatial_encoder.pt')
-    model.embedding_manager.spatial_encoder_model.load_state_dict(ckpt)
-    model.embedding_manager.load('logs/anomaly-checkpoints/checkpoints/embeddings.pt')
-    dataset = Positive_sample_with_generated_mask(opt.data_root,sample_name, anomaly_name, repeats=1, size=256, set='train',
-                                                      per_image_tokens=False)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, drop_last=True)
-    save_dir = 'generated_dataset/%s/%s' % (sample_name, anomaly_name)
-    os.makedirs(save_dir,exist_ok=True)
-    os.makedirs(os.path.join(save_dir,'image'), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, 'mask'), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, 'image-mask'), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, 'ori'), exist_ok=True)
-    os.makedirs(os.path.join(save_dir, 'recon'), exist_ok=True)
-    cnt=0
-    with torch.no_grad():
-        for epoch in range(1000):
-            for idx, batch in enumerate(dataloader):
-                if cnt>500:
-                    exit()
-                with model.ema_scope():
-                    mask=batch['mask'].cpu()
-                    ori_images=batch['image'].permute(0,3,1,2)
-                    images=model.log_images(batch,sample=False,inpaint=True,unconditional_only=True,adaptive_mask=opt.adaptive_mask)
-                    imgs=images['samples_inpainting'].cpu()
-                    recon_image=images['reconstruction']
-                    for i in range(len(imgs)):
-                        save_image((imgs[i] + 1) / 2, os.path.join(save_dir, 'image', '%d.jpg' % cnt), normalize=False)
-                        save_image((ori_images[i] + 1) / 2, os.path.join(save_dir, 'ori', '%d.jpg' % cnt),
-                                   normalize=False)
-                        save_image((recon_image[i]+1) / 2, os.path.join(save_dir, 'recon', '%d.jpg' % cnt),
-                                   normalize=False)
-                        save_image(mask[i], os.path.join(save_dir, 'mask','%d.jpg' % cnt))
-                        save_image(torch.stack([(imgs[i]+1)/2,mask[i].repeat(3,1,1)],dim=0), os.path.join(save_dir, 'image-mask', '%d.jpg' % cnt))
-                        cnt+=1
+
+    if opt.image_path and opt.mask_path:
+        # Single image mode
+        config = OmegaConf.load("configs/stable-diffusion/v1-inference.yaml")
+        # Remove personalization_config if it exists
+        if "personalization_config" in config.model.params:
+            del config.model.params.personalization_config
+        actual_resume = './models/ldm/text2img-large/model.ckpt'
+        model = load_model_from_config(config, actual_resume)
+        sample_name = opt.sample_name
+        anomaly_name = opt.anomaly_name
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(device)
+        sampler = DDIMSampler(model)
+
+        # Create batch from single image and mask
+        batch = make_batch(opt.image_path, opt.mask_path, device)
+
+        save_dir = os.path.join('anomaly_output', sample_name, anomaly_name)
+        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'image'), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'mask'), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'ori'), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'recon'), exist_ok=True)
+
+        with torch.no_grad():
+            with model.ema_scope():
+                ori_images = batch['image'].permute(0, 3, 1, 2).cpu()
+                images = model.log_images(batch, sample=False, inpaint=True, unconditional_only=True, adaptive_mask=opt.adaptive_mask)
+                imgs = images['samples_inpainting'].cpu()
+                recon_image = images['reconstruction'].cpu()
+                mask = batch['mask'].cpu()
+
+                # Save for the single sample
+                save_image((imgs[0] + 1) / 2, os.path.join(save_dir, 'image', '0.jpg'), normalize=False)
+                save_image((ori_images[0] + 1) / 2, os.path.join(save_dir, 'ori', '0.jpg'), normalize=False)
+                save_image((recon_image[0] + 1) / 2, os.path.join(save_dir, 'recon', '0.jpg'), normalize=False)
+                save_image(mask[0], os.path.join(save_dir, 'mask', '0.jpg'))
+
+        print(f"Anomaly image generated and saved in {save_dir}")
+    else:
+        # Batch mode
+        config = OmegaConf.load("configs/stable-diffusion/v1-inference.yaml")
+        if "personalization_config" in config.model.params:
+            del config.model.params.personalization_config
+        actual_resume = './models/ldm/text2img-large/model.ckpt'
+        model = load_model_from_config(config, actual_resume)
+        sample_name = opt.sample_name
+        anomaly_name = opt.anomaly_name
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(device)
+        sampler = DDIMSampler(model)
+        # model.prepare_spatial_encoder(optimze_together=True)
+        # ckpt = torch.load('logs/anomaly-checkpoints/checkpoints/spatial_encoder.pt')
+        # model.embedding_manager.spatial_encoder_model.load_state_dict(ckpt)
+        # model.embedding_manager.load('logs/anomaly-checkpoints/checkpoints/embeddings.pt')
+        dataset = Positive_sample_with_generated_mask(opt.data_root, sample_name, anomaly_name, repeats=1, size=256, set='train',
+                                                          per_image_tokens=False)
+        dataloader = DataLoader(dataset, batch_size=8, shuffle=False, drop_last=True)
+        save_dir = os.path.join('new_anomaly_generated', sample_name, anomaly_name)
+        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'image'), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'mask'), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'image-mask'), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'ori'), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, 'recon'), exist_ok=True)
+        cnt = 0
+        with torch.no_grad():
+            for epoch in range(1000):
+                for idx, batch in enumerate(dataloader):
+                    if cnt > 500:
+                        exit()
+                    with model.ema_scope():
+                        mask = batch['mask'].cpu()
+                        ori_images = batch['image'].permute(0, 3, 1, 2)
+                        images = model.log_images(batch, sample=False, inpaint=True, unconditional_only=True, adaptive_mask=opt.adaptive_mask)
+                        imgs = images['samples_inpainting'].cpu()
+                        recon_image = images['reconstruction']
+                        for i in range(len(imgs)):
+                            save_image((imgs[i] + 1) / 2, os.path.join(save_dir, 'image', '%d.jpg' % cnt), normalize=False)
+                            save_image((ori_images[i] + 1) / 2, os.path.join(save_dir, 'ori', '%d.jpg' % cnt),
+                                       normalize=False)
+                            save_image((recon_image[i] + 1) / 2, os.path.join(save_dir, 'recon', '%d.jpg' % cnt),
+                                       normalize=False)
+                            save_image(mask[i], os.path.join(save_dir, 'mask', '%d.jpg' % cnt))
+                            save_image(torch.stack([(imgs[i] + 1) / 2, mask[i].repeat(3, 1, 1)], dim=0), os.path.join(save_dir, 'image-mask', '%d.jpg' % cnt))
+                            cnt += 1
 
 #python generate_with_mask.py --sample_name=screw --anomaly_name=thread_side --adaptive_mask
 #python generate_with_mask.py --sample_name=wood --anomaly_name=color --adaptive_mask
